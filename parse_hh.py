@@ -3,74 +3,95 @@ from bs4 import BeautifulSoup
 
 def get_html(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
     }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        # Проверка что это hh.ru
+        if "hh.ru" not in url:
+            raise ValueError("Поддерживаются только ссылки с hh.ru")
+            
+        return response
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Ошибка сети: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Ошибка парсинга: {str(e)}")
 
 def extract_vacancy_data(html):
-    soup = BeautifulSoup(html, 'html.parser')
-
-    def safe_text(selector, attrs=None):
-        el = soup.find(selector, attrs or {})
-        return el.text.strip() if el else "Не найдено"
-
-    title = safe_text('h1')
-    salary = safe_text('span', {'data-qa': 'vacancy-salary'})
-    company = safe_text('a', {'data-qa': 'vacancy-company-name'})
-    description = soup.find('div', {'data-qa': 'vacancy-description'})
-    description_text = description.get_text(separator="\n").strip() if description else "Описание не найдено"
-
-    markdown = f"# {title}\n\n"
-    markdown += f"**Компания:** {company}\n\n"
-    markdown += f"**Зарплата:** {salary}\n\n"
-    markdown += f"## Описание\n\n{description_text}"
-
-    return markdown.strip()
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Проверка на капчу
+        if "captcha" in html.lower():
+            raise ValueError("Обнаружена капча! Попробуйте позже")
+        
+        # Извлечение данных
+        title = soup.find('h1').text.strip() if soup.find('h1') else "Нет названия"
+        salary = soup.find('span', {'data-qa': 'vacancy-salary'}).text.strip() if soup.find('span', {'data-qa': 'vacancy-salary'}) else "Не указана"
+        company = soup.find('a', {'data-qa': 'vacancy-company-name'}).text.strip() if soup.find('a', {'data-qa': 'vacancy-company-name'}) else "Компания скрыта"
+        
+        # Основное описание
+        description_div = soup.find('div', {'data-qa': 'vacancy-description'})
+        description = description_div.get_text(separator="\n").strip() if description_div else "Описание не найдено"
+        
+        # Ключевые навыки
+        skills = []
+        skills_container = soup.find('div', class_='bloko-tag-list')
+        if skills_container:
+            skills = [skill.text.strip() for skill in skills_container.find_all('span', class_='bloko-tag__section_text')]
+        
+        markdown = f"# {title}\n\n"
+        markdown += f"**Компания:** {company}\n\n"
+        markdown += f"**Зарплата:** {salary}\n\n"
+        markdown += f"## Описание вакансии\n{description}\n\n"
+        markdown += f"## Ключевые навыки\n{', '.join(skills) if skills else 'Не указаны'}"
+        
+        return markdown
+        
+    except Exception as e:
+        return f"Ошибка извлечения данных вакансии: {str(e)}"
 
 def extract_resume_data(html):
-    soup = BeautifulSoup(html, 'html.parser')
-
-    def safe_text(selector, **kwargs):
-        el = soup.find(selector, kwargs)
-        return el.text.strip() if el else "Не найдено"
-
-    name = safe_text('h2', data_qa='bloko-header-1')
-    gender_age = safe_text('p')
-    location = safe_text('span', data_qa='resume-personal-address')
-    job_title = safe_text('span', data_qa='resume-block-title-position')
-    job_status = safe_text('span', data_qa='job-search-status')
-
-    experiences = []
-    experience_section = soup.find('div', {'data-qa': 'resume-block-experience'})
-    if experience_section:
-        experience_items = experience_section.find_all('div', class_='resume-block-item-gap')
-        for item in experience_items:
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Базовая информация
+        name = soup.find('h2', {'data-qa': 'resume-personal-name'}).text.strip() if soup.find('h2', {'data-qa': 'resume-personal-name'}) else "Имя не указано"
+        position = soup.find('span', {'data-qa': 'resume-block-title-position'}).text.strip() if soup.find('span', {'data-qa': 'resume-block-title-position'}) else "Должность не указана"
+        
+        # Опыт работы
+        experiences = []
+        for exp in soup.find_all('div', {'data-qa': 'resume-block-experience'}):
             try:
-                period = item.find('div', class_='bloko-column_s-2').text.strip()
-                duration = item.find('div', class_='bloko-text').text.strip()
-                period = period.replace(duration, f" ({duration})")
-                company = item.find('div', class_='bloko-text_strong').text.strip()
-                position = item.find('div', {'data-qa': 'resume-block-experience-position'}).text.strip()
-                description = item.find('div', {'data-qa': 'resume-block-experience-description'}).text.strip()
-                experiences.append(f"**{period}**\n\n*{company}*\n\n**{position}**\n\n{description}\n")
-            except Exception:
+                period = exp.find('div', class_='resume-block__period').text.strip() if exp.find('div', class_='resume-block__period') else "Период не указан"
+                company = exp.find('div', class_='resume-block__sub-title').text.strip() if exp.find('div', class_='resume-block__sub-title') else "Компания не указана"
+                position = exp.find('div', class_='resume-block__title').text.strip() if exp.find('div', class_='resume-block__title') else "Должность не указана"
+                description = exp.find('div', class_='resume-block__description').text.strip() if exp.find('div', class_='resume-block__description') else "Описание отсутствует"
+                
+                experiences.append(
+                    f"**{period}**\n"
+                    f"*{company}*\n"
+                    f"**{position}**\n"
+                    f"{description}\n"
+                )
+            except:
                 continue
-
-    skills = []
-    skills_section = soup.find('div', {'data-qa': 'skills-table'})
-    if skills_section:
-        skills = [tag.text.strip() for tag in skills_section.find_all('span', {'data-qa': 'bloko-tag__text'})]
-
-    markdown = f"# {name}\n\n"
-    markdown += f"**{gender_age}**\n\n"
-    markdown += f"**Местоположение:** {location}\n\n"
-    markdown += f"**Должность:** {job_title}\n\n"
-    markdown += f"**Статус:** {job_status}\n\n"
-    markdown += "## Опыт работы\n\n"
-    markdown += "\n".join(experiences) if experiences else "Опыт работы не найден.\n"
-    markdown += "\n## Ключевые навыки\n\n"
-    markdown += ", ".join(skills) if skills else "Навыки не указаны.\n"
-
-    return markdown.strip()
+                
+        # Навыки
+        skills = []
+        skills_section = soup.find('div', {'data-qa': 'skills-table'})
+        if skills_section:
+            skills = [skill.text.strip() for skill in skills_section.find_all('span', class_='bloko-tag__section_text')]
+        
+        markdown = f"# {name}\n\n"
+        markdown += f"**Целевая должность:** {position}\n\n"
+        markdown += "## Опыт работы\n" + ("\n---\n".join(experiences) if experiences else "Опыт не указан") + "\n\n"
+        markdown += "## Ключевые навыки\n" + (', '.join(skills) if skills else "Навыки не указаны")
+        
+        return markdown
+        
+    except Exception as e:
+        return f"Ошибка извлечения данных резюме: {str(e)}"
